@@ -1,15 +1,15 @@
 import os
 import re
-import requests
-import pandas as pd
-from flask import Flask, render_template, request, flash, redirect, url_for, jsonify, session
-from werkzeug.utils import secure_filename
-import json
 import warnings
 warnings.filterwarnings('ignore')
+import requests
+import pandas as pd
+from flask import Flask, render_template, request, flash, redirect, url_for, jsonify
+from werkzeug.utils import secure_filename
+import gc  # Garbage collector for memory management
 
 app = Flask(__name__)
-app.secret_key = 'your-secret-key-change-this-in-production'
+app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this-in-production')
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
@@ -35,7 +35,6 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def sanitize_code(code):
-    """Clean institution code - remove special characters and spaces"""
     if pd.isna(code) or code == '':
         return ''
     return re.sub(r'[^A-Za-z0-9]', '', str(code).strip().upper())
@@ -51,9 +50,7 @@ def create_institution(name, code):
         response.raise_for_status()
         return {"success": True, "url": response.json().get("url"), "code": clean_code}
     except requests.exceptions.RequestException as e:
-        # Check if institution already exists
         if response and response.status_code == 400 and "already exists" in str(response.text).lower():
-            # Try to find existing institution
             try:
                 get_response = requests.get(
                     f"{TABBYCAT_URL}/api/v1/institutions",
@@ -70,8 +67,15 @@ def create_institution(name, code):
         return {"success": False, "error": str(e)}
 
 def get_institution_by_code(code):
-    """Get institution URL by its code"""
+    """Get institution URL by its code with caching"""
     clean_code = sanitize_code(code)
+    # Use a simple cache to avoid repeated API calls
+    if not hasattr(get_institution_by_code, 'cache'):
+        get_institution_by_code.cache = {}
+    
+    if clean_code in get_institution_by_code.cache:
+        return get_institution_by_code.cache[clean_code]
+    
     try:
         response = requests.get(
             f"{TABBYCAT_URL}/api/v1/institutions",
@@ -82,23 +86,22 @@ def get_institution_by_code(code):
         institutions = response.json()
         for inst in institutions:
             if inst.get("code") == clean_code:
+                get_institution_by_code.cache[clean_code] = inst.get("url")
                 return inst.get("url")
+        get_institution_by_code.cache[clean_code] = None
         return None
     except:
         return None
 
 def create_team(team_data):
-    """Create a team in Tabbycat with the exact format from the spreadsheet"""
+    """Create a team in Tabbycat"""
     endpoint = f"{TABBYCAT_URL}/api/v1/teams"
-    
-    # Get institution URL by code
     institution_code = sanitize_code(str(team_data.get('institution', '')))
     inst_url = get_institution_by_code(institution_code)
     
     if not inst_url:
         return {"success": False, "error": f"Institution '{institution_code}' not found"}
     
-    # Build team name - use team_name (human) if available, otherwise use code name
     team_name = team_data.get('team_name (human)', '')
     if not team_name or pd.isna(team_name):
         team_name = team_data.get('code name', '')
@@ -106,12 +109,14 @@ def create_team(team_data):
     payload = {
         "name": str(team_name).strip(),
         "institution": inst_url,
-        "reference": str(team_data.get('reference', '')),
-        "short_reference": str(team_data.get('short_reference', '')),
         "use_institution_prefix": bool(team_data.get('use_institution_prefix', True))
     }
     
-    # Add emoji if present
+    # Only add optional fields if they exist
+    if team_data.get('reference') and not pd.isna(team_data.get('reference')):
+        payload["reference"] = str(team_data.get('reference')).strip()
+    if team_data.get('short_reference') and not pd.isna(team_data.get('short_reference')):
+        payload["short_reference"] = str(team_data.get('short_reference')).strip()
     if team_data.get('emoji') and not pd.isna(team_data.get('emoji')):
         payload["emoji"] = str(team_data.get('emoji')).strip()
     
@@ -120,21 +125,16 @@ def create_team(team_data):
         response.raise_for_status()
         return {"success": True, "data": response.json()}
     except requests.exceptions.RequestException as e:
-        return {"success": False, "error": str(e), "response": response.text if response else None}
+        return {"success": False, "error": str(e)}
 
 def create_adjudicator(adj_data):
     """Create an adjudicator in Tabbycat"""
     endpoint = f"{TABBYCAT_URL}/api/v1/adjudicators"
-    
-    # Get institution URL by code
     institution_code = sanitize_code(str(adj_data.get('institution', '')))
     inst_url = get_institution_by_code(institution_code) if institution_code else None
     
-    payload = {
-        "name": str(adj_data.get('name', '')).strip()
-    }
+    payload = {"name": str(adj_data.get('name', '')).strip()}
     
-    # Add optional fields if they exist and have values
     if inst_url:
         payload["institution"] = inst_url
     if adj_data.get('email') and not pd.isna(adj_data.get('email')):
@@ -142,11 +142,20 @@ def create_adjudicator(adj_data):
     if adj_data.get('gender') and not pd.isna(adj_data.get('gender')):
         payload["gender"] = str(adj_data.get('gender')).strip()
     if adj_data.get('base_score') is not None and not pd.isna(adj_data.get('base_score')):
-        payload["base_score"] = float(adj_data.get('base_score'))
+        try:
+            payload["base_score"] = float(adj_data.get('base_score'))
+        except:
+            pass
     if adj_data.get('independent') is not None and not pd.isna(adj_data.get('independent')):
-        payload["independent"] = bool(adj_data.get('independent'))
+        if isinstance(adj_data.get('independent'), str):
+            payload["independent"] = adj_data.get('independent').strip().upper() == 'TRUE'
+        else:
+            payload["independent"] = bool(adj_data.get('independent'))
     if adj_data.get('adj_core') is not None and not pd.isna(adj_data.get('adj_core')):
-        payload["adj_core"] = bool(adj_data.get('adj_core'))
+        if isinstance(adj_data.get('adj_core'), str):
+            payload["adj_core"] = adj_data.get('adj_core').strip().upper() == 'TRUE'
+        else:
+            payload["adj_core"] = bool(adj_data.get('adj_core'))
     if adj_data.get('notes') and not pd.isna(adj_data.get('notes')):
         payload["notes"] = str(adj_data.get('notes')).strip()
     
@@ -155,21 +164,18 @@ def create_adjudicator(adj_data):
         response.raise_for_status()
         return {"success": True, "data": response.json()}
     except requests.exceptions.RequestException as e:
-        return {"success": False, "error": str(e), "response": response.text if response else None}
+        return {"success": False, "error": str(e)}
 
 def create_speaker(speaker_data):
-    """Create a speaker in Tabbycat (using the team endpoint with speakers)"""
-    # Get team by name
+    """Create a speaker in Tabbycat"""
     team_name = str(speaker_data.get('team', '')).strip()
     endpoint = f"{TABBYCAT_URL}/api/v1/teams"
     
     try:
-        # Try to find existing team
         response = requests.get(endpoint, headers=HEADERS, timeout=30)
         response.raise_for_status()
         teams = response.json()
         
-        # Find team by name
         team_url = None
         for team in teams:
             if team.get('name') == team_name:
@@ -179,11 +185,7 @@ def create_speaker(speaker_data):
         if not team_url:
             return {"success": False, "error": f"Team '{team_name}' not found"}
         
-        # Create speaker (will be added to team)
-        # Since Tabbycat's API creates speakers within teams, we'll use the team's speakers endpoint
-        speaker_payload = {
-            "name": str(speaker_data.get('name', '')).strip()
-        }
+        speaker_payload = {"name": str(speaker_data.get('name', '')).strip()}
         
         if speaker_data.get('email') and not pd.isna(speaker_data.get('email')):
             speaker_payload["email"] = str(speaker_data.get('email')).strip()
@@ -192,39 +194,39 @@ def create_speaker(speaker_data):
         if speaker_data.get('phone') and not pd.isna(speaker_data.get('phone')):
             speaker_payload["phone"] = str(speaker_data.get('phone')).strip()
         if speaker_data.get('anonymous') is not None and not pd.isna(speaker_data.get('anonymous')):
-            speaker_payload["anonymous"] = bool(speaker_data.get('anonymous'))
+            if isinstance(speaker_data.get('anonymous'), str):
+                speaker_payload["anonymous"] = speaker_data.get('anonymous').strip().upper() == 'TRUE'
+            else:
+                speaker_payload["anonymous"] = bool(speaker_data.get('anonymous'))
         if speaker_data.get('initials match') and not pd.isna(speaker_data.get('initials match')):
             speaker_payload["initials_match"] = str(speaker_data.get('initials match')).strip()
         
-        # Use the team's speakers endpoint
         speaker_endpoint = f"{team_url}/speakers"
         response = requests.post(speaker_endpoint, json=speaker_payload, headers=HEADERS, timeout=30)
         response.raise_for_status()
         return {"success": True, "data": response.json()}
         
     except requests.exceptions.RequestException as e:
-        return {"success": False, "error": str(e), "response": response.text if response else None}
+        return {"success": False, "error": str(e)}
 
 def process_institutions(filepath):
-    """Process institutions from spreadsheet (Format: id, name, code)"""
+    """Process institutions from spreadsheet"""
     try:
-        df = pd.read_csv(filepath) if filepath.endswith('.csv') else pd.read_excel(filepath)
+        # Read file in chunks to save memory
+        if filepath.endswith('.csv'):
+            df = pd.read_csv(filepath)
+        else:
+            df = pd.read_excel(filepath)
         
-        # Check required columns
         required_cols = ['id', 'name', 'code']
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             return {"success": False, "error": f"Missing columns: {', '.join(missing_cols)}"}
         
         df = df.fillna('')
-        results = {
-            "success": True,
-            "total_rows": len(df),
-            "created": 0,
-            "errors": [],
-            "details": []
-        }
+        results = {"success": True, "total_rows": len(df), "created": 0, "errors": [], "details": []}
         
+        # Process row by row
         for idx, row in df.iterrows():
             name = str(row['name']).strip()
             code = str(row['code']).strip()
@@ -236,39 +238,30 @@ def process_institutions(filepath):
             result = create_institution(name, code)
             if result["success"]:
                 results["created"] += 1
-                results["details"].append({
-                    "name": name,
-                    "code": code,
-                    "status": "Created" if not result.get("existing") else "Already existed"
-                })
+                results["details"].append(f"{name} ({code})")
             else:
                 results["errors"].append(f"Row {idx+2}: {result.get('error', 'Unknown error')}")
         
+        # Free memory
+        del df
+        gc.collect()
         return results
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def process_adjudicators(filepath):
-    """Process adjudicators from spreadsheet (Format: id, name, institution, email, gender, base_score, independent, adj_core, notes)"""
+    """Process adjudicators from spreadsheet"""
     try:
-        df = pd.read_csv(filepath) if filepath.endswith('.csv') else pd.read_excel(filepath)
-        
-        # Expected columns
-        expected_cols = ['id', 'name', 'institution', 'email', 'gender', 'base_score', 'independent', 'adj_core', 'notes']
-        # Check which columns exist
-        available_cols = [col for col in expected_cols if col in df.columns]
+        if filepath.endswith('.csv'):
+            df = pd.read_csv(filepath)
+        else:
+            df = pd.read_excel(filepath)
         
         if 'name' not in df.columns:
             return {"success": False, "error": "Missing required column: 'name'"}
         
         df = df.fillna('')
-        results = {
-            "success": True,
-            "total_rows": len(df),
-            "created": 0,
-            "errors": [],
-            "details": []
-        }
+        results = {"success": True, "total_rows": len(df), "created": 0, "errors": [], "details": []}
         
         for idx, row in df.iterrows():
             name = str(row['name']).strip()
@@ -276,10 +269,8 @@ def process_adjudicators(filepath):
                 results["errors"].append(f"Row {idx+2}: Missing name")
                 continue
             
-            # Build adjudicator data
             adj_data = {"name": name}
             
-            # Only add fields that exist in the dataframe
             if 'institution' in df.columns and not pd.isna(row['institution']):
                 adj_data["institution"] = str(row['institution']).strip()
             if 'email' in df.columns and not pd.isna(row['email']):
@@ -307,54 +298,47 @@ def process_adjudicators(filepath):
             result = create_adjudicator(adj_data)
             if result["success"]:
                 results["created"] += 1
-                results["details"].append({
-                    "name": name,
-                    "institution": adj_data.get('institution', 'None'),
-                    "status": "Created"
-                })
+                results["details"].append(f"{name} ({adj_data.get('institution', 'No institution')})")
             else:
                 results["errors"].append(f"Row {idx+2}: {result.get('error', 'Unknown error')}")
         
+        # Free memory
+        del df
+        gc.collect()
         return results
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def process_teams(filepath):
-    """Process teams from spreadsheet (Format: id, institution, reference, short_reference, code name, use_institution_prefix, emoji, team_name (human), code name)"""
+    """Process teams from spreadsheet"""
     try:
-        df = pd.read_csv(filepath) if filepath.endswith('.csv') else pd.read_excel(filepath)
+        if filepath.endswith('.csv'):
+            df = pd.read_csv(filepath)
+        else:
+            df = pd.read_excel(filepath)
         
-        # Check required columns
         required_cols = ['institution', 'code name']
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             return {"success": False, "error": f"Missing columns: {', '.join(missing_cols)}"}
         
         df = df.fillna('')
-        results = {
-            "success": True,
-            "total_rows": len(df),
-            "created": 0,
-            "errors": [],
-            "details": []
-        }
+        results = {"success": True, "total_rows": len(df), "created": 0, "errors": [], "details": []}
         
-        # Group by institution to create teams
         for idx, row in df.iterrows():
             institution = str(row['institution']).strip()
             if not institution:
                 results["errors"].append(f"Row {idx+2}: Missing institution")
                 continue
             
-            # Build team data
             team_data = {
                 "institution": institution,
-                "reference": row.get('reference', ''),
-                "short_reference": row.get('short_reference', ''),
+                "reference": row.get('reference', '') if not pd.isna(row.get('reference', '')) else '',
+                "short_reference": row.get('short_reference', '') if not pd.isna(row.get('short_reference', '')) else '',
                 "code name": str(row['code name']).strip(),
-                "use_institution_prefix": row.get('use_institution_prefix', True),
-                "emoji": row.get('emoji', ''),
-                "team_name (human)": row.get('team_name (human)', '')
+                "use_institution_prefix": row.get('use_institution_prefix', True) if not pd.isna(row.get('use_institution_prefix', True)) else True,
+                "emoji": row.get('emoji', '') if not pd.isna(row.get('emoji', '')) else '',
+                "team_name (human)": row.get('team_name (human)', '') if not pd.isna(row.get('team_name (human)', '')) else ''
             }
             
             if not team_data["code name"]:
@@ -364,38 +348,33 @@ def process_teams(filepath):
             result = create_team(team_data)
             if result["success"]:
                 results["created"] += 1
-                results["details"].append({
-                    "team_name": team_data["team_name (human)"] or team_data["code name"],
-                    "institution": institution,
-                    "code": team_data["code name"],
-                    "status": "Created"
-                })
+                team_display = team_data["team_name (human)"] or team_data["code name"]
+                results["details"].append(f"{team_display} ({institution})")
             else:
                 results["errors"].append(f"Row {idx+2}: {result.get('error', 'Unknown error')}")
         
+        # Free memory
+        del df
+        gc.collect()
         return results
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def process_speakers(filepath):
-    """Process speakers from spreadsheet (Format: id, name, gender, email, phone, anonymous, emoji, team, categories, initials match)"""
+    """Process speakers from spreadsheet"""
     try:
-        df = pd.read_csv(filepath) if filepath.endswith('.csv') else pd.read_excel(filepath)
+        if filepath.endswith('.csv'):
+            df = pd.read_csv(filepath)
+        else:
+            df = pd.read_excel(filepath)
         
-        # Check required columns
         required_cols = ['name', 'team']
         missing_cols = [col for col in required_cols if col not in df.columns]
         if missing_cols:
             return {"success": False, "error": f"Missing columns: {', '.join(missing_cols)}"}
         
         df = df.fillna('')
-        results = {
-            "success": True,
-            "total_rows": len(df),
-            "created": 0,
-            "errors": [],
-            "details": []
-        }
+        results = {"success": True, "total_rows": len(df), "created": 0, "errors": [], "details": []}
         
         for idx, row in df.iterrows():
             name = str(row['name']).strip()
@@ -405,7 +384,6 @@ def process_speakers(filepath):
                 results["errors"].append(f"Row {idx+2}: Missing name or team")
                 continue
             
-            # Build speaker data
             speaker_data = {
                 "name": name,
                 "team": team,
@@ -416,7 +394,6 @@ def process_speakers(filepath):
                 "initials match": row.get('initials match', '') if not pd.isna(row.get('initials match', '')) else ''
             }
             
-            # Handle boolean for anonymous
             if 'anonymous' in df.columns and not pd.isna(row['anonymous']):
                 if isinstance(row['anonymous'], str):
                     speaker_data["anonymous"] = row['anonymous'].strip().upper() == 'TRUE'
@@ -426,14 +403,13 @@ def process_speakers(filepath):
             result = create_speaker(speaker_data)
             if result["success"]:
                 results["created"] += 1
-                results["details"].append({
-                    "name": name,
-                    "team": team,
-                    "status": "Created"
-                })
+                results["details"].append(f"{name} → {team}")
             else:
                 results["errors"].append(f"Row {idx+2}: {result.get('error', 'Unknown error')}")
         
+        # Free memory
+        del df
+        gc.collect()
         return results
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -477,12 +453,16 @@ def index():
             os.remove(filepath)
             return redirect(request.url)
         
-        os.remove(filepath)
+        # Clean up uploaded file
+        try:
+            os.remove(filepath)
+        except:
+            pass
         
         if results["success"]:
-            flash(f'Import complete! {results.get("created", 0)} items created.', 'success')
+            flash(f'✅ Import complete! {results.get("created", 0)} items created.', 'success')
         else:
-            flash(f'Import failed: {results.get("error", "Unknown error")}', 'danger')
+            flash(f'❌ Import failed: {results.get("error", "Unknown error")}', 'danger')
         
         return render_template('index.html', results=results, import_type=import_type)
     
@@ -493,4 +473,4 @@ def health_check():
     return jsonify({"status": "healthy", "message": "Tabbycat Importer is running"})
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5000)
