@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tabbycat Importer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 40px;
+            max-width: 900px;
+            width: 100%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.2em;
+        }
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        .import-type-selector {
+            margin: 20px 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        .import-type-selector label {
+            padding: 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.3s ease;
+            background: #f7fafc;
+        }
+        .import-type-selector label:hover {
+            border-color: #667eea;
+            background: #f0f0ff;
+        }
+        .import-type-selector input[type="radio"] {
+            display: none;
+        }
+        .import-type-selector input[type="radio"]:checked + span {
+            font-weight: bold;
+        }
+        .import-type-selector input[type="radio"]:checked + label {
+            border-color: #667eea;
+            background: #ebf4ff;
+        }
+        .upload-area {
+            border: 3px dashed #ddd;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            transition: all 0.3s ease;
+            background: #fafafa;
+            margin-top: 20px;
+        }
+        .upload-area:hover {
+            border-color: #667eea;
+            background: #f0f0ff;
+        }
+        .upload-icon {
+            font-size: 4em;
+            margin-bottom: 15px;
+            display: block;
+        }
+        .upload-area input[type="file"] {
+            display: none;
+        }
+        .upload-label {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 12px 30px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.3s ease;
+        }
+        .upload-label:hover {
+            background: #5a67d8;
+        }
+        .file-info {
+            margin-top: 15px;
+            color: #666;
+            font-size: 0.9em;
+        }
+        .submit-btn {
+            background: #48bb78;
+            color: white;
+            border: none;
+            padding: 14px 40px;
+            border-radius: 8px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s ease;
+            margin-top: 20px;
+            width: 100%;
+        }
+        .submit-btn:hover {
+            background: #38a169;
+        }
+        .submit-btn:disabled {
+            background: #a0aec0;
+            cursor: not-allowed;
+        }
+        .flash-messages {
+            margin: 20px 0;
+        }
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        .alert-success {
+            background: #c6f6d5;
+            color: #22543d;
+            border: 1px solid #9ae6b4;
+        }
+        .alert-danger {
+            background: #fed7d7;
+            color: #742a2a;
+            border: 1px solid #feb2b2;
+        }
+        .alert-info {
+            background: #bee3f8;
+            color: #2a4365;
+            border: 1px solid #90cdf4;
+        }
+        .results {
+            margin-top: 30px;
+            padding-top: 30px;
+            border-top: 2px solid #e2e8f0;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: #f7fafc;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .stat-label {
+            color: #718096;
+            font-size: 0.9em;
+        }
+        .error-list {
+            background: #fff5f5;
+            border: 1px solid #feb2b2;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .error-list li {
+            color: #742a2a;
+            padding: 5px 0;
+            list-style: none;
+            font-size: 0.9em;
+        }
+        .details-list {
+            background: #f0fff4;
+            border: 1px solid #9ae6b4;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .details-list li {
+            color: #22543d;
+            padding: 5px 0;
+            list-style: none;
+            font-size: 0.9em;
+        }
+        .format-info {
+            background: #ebf8ff;
+            border-left: 4px solid #3182ce;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+            font-size: 0.95em;
+            color: #2a4365;
+        }
+        .format-info code {
+            background: #e2e8f0;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+            h1 {
+                font-size: 1.8em;
+            }
+            .upload-area {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📋 Tabbycat Importer</h1>
+        <p class="subtitle">Upload a spreadsheet to automatically import data into Tabbycat</p>
+        
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="alert alert-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        
+        <!-- Import Type Selection -->
+        <form method="POST" enctype="multipart/form-data" id="uploadForm">
+            <div class="import-type-selector">
+                <label for="institutions">
+                    <input type="radio" name="import_type" id="institutions" value="institutions" required>
+                    <span>🏛️ Institutions</span>
+                </label>
+                <label for="adjudicators">
+                    <input type="radio" name="import_type" id="adjudicators" value="adjudicators">
+                    <span>⚖️ Adjudicators</span>
+                </label>
+                <label for="teams">
+                    <input type="radio" name="import_type" id="teams" value="teams">
+                    <span>👥 Teams</span>
+                </label>
+                <label for="speakers">
+                    <input type="radio" name="import_type" id="speakers" value="speakers">
+                    <span>🎤 Speakers</span>
+                </label>
+            </div>
+            
+            <!-- Format Information -->
+            <div class="format-info" id="formatInfo">
+                <strong>📝 Required Format:</strong><br>
+                <span id="formatText">Select an import type above to see the required format.</span>
+            </div>
+            
+            <!-- Upload Area -->
+            <div class="upload-area" id="dropZone">
+                <span class="upload-icon">📁</span>
+                <label for="file" class="upload-label">Choose Spreadsheet</label>
+                <input type="file" name="file" id="file" accept=".csv,.xlsx,.xls" required>
+                <div class="file-info" id="fileInfo">No file selected</div>
+            </div>
+            
+            <button type="submit" class="submit-btn" id="submitBtn">🚀 Start Import</button>
+        </form>
+        
+        <!-- Results Section -->
+        {% if results %}
+            <div class="results">
+                <h2>📊 Import Results</h2>
+                
+                {% if results.success %}
+                    <div class="stats">
+                        <div class="stat-card">
+                            <div class="stat-number">{{ results.created }}</div>
+                            <div class="stat-label">Items Created</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{{ results.total_rows }}</div>
+                            <div class="stat-label">Total Rows Processed</div>
+                        </div>
+                    </div>
+                    
+                    {% if results.details %}
+                        <h3 style="margin-top: 20px;">✅ Details</h3>
+                        <ul class="details-list">
+                            {% for detail in results.details[:20] %}
+                                <li>• {{ detail }}</li>
+                            {% endfor %}
+                            {% if results.details|length > 20 %}
+                                <li style="color: #718096;">... and {{ results.details|length - 20 }} more items</li>
+                            {% endif %}
+                        </ul>
+                    {% endif %}
+                    
+                    {% if results.errors %}
+                        <h3 style="color: #e53e3e; margin-top: 20px;">⚠️ Errors Encountered</h3>
+                        <ul class="error-list">
+                            {% for error in results.errors %}
+                                <li>• {{ error }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% endif %}
+                    
+                {% else %}
+                    <div class="alert alert-danger">
+                        <strong>❌ Import Failed:</strong> {{ results.error }}
+                    </div>
+                {% endif %}
+            </div>
+        {% endif %}
+    </div>
+    
+    <script>
+        // Update format info based on selected import type
+        document.querySelectorAll('input[name="import_type"]').forEach(function(radio) {
+            radio.addEventListener('change', function() {
+                const formatInfo = document.getElementById('formatText');
+                const formats = {
+                    'institutions': 'Columns: <code>id</code>, <code>name</code>, <code>code</code>',
+                    'adjudicators': 'Columns: <code>id</code>, <code>name</code>, <code>institution</code>, <code>email</code>, <code>gender</code>, <code>base_score</code>, <code>independent</code>, <code>adj_core</code>, <code>notes</code>',
+                    'teams': 'Columns: <code>id</code>, <code>institution</code>, <code>reference</code>, <code>short_reference</code>, <code>code name</code>, <code>use_institution_prefix</code>, <code>emoji</code>, <code>team_name (human)</code>, <code>code name</code>',
+                    'speakers': 'Columns: <code>id</code>, <code>name</code>, <code>gender</code>, <code>email</code>, <code>phone</code>, <code>anonymous</code>, <code>emoji</code>, <code>team</code>, <code>categories</code>, <code>initials match</code>'
+                };
+                formatInfo.innerHTML = '<strong>📝 Required Format:</strong><br>' + (formats[this.value] || 'Select an import type above to see the required format.');
+            });
+        });
+        
+        // File input handler
+        document.getElementById('file').addEventListener('change', function(e) {
+            const fileName = this.files[0] ? this.files[0].name : 'No file selected';
+            document.getElementById('fileInfo').textContent = fileName;
+            document.getElementById('submitBtn').disabled = false;
+        });
+        
+        // Drag and drop functionality
+        const dropZone = document.getElementById('dropZone');
+        
+        dropZone.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            this.style.borderColor = '#667eea';
+            this.style.background = '#f0f0ff';
+        });
+        
+        dropZone.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            this.style.borderColor = '#ddd';
+            this.style.background = '#fafafa';
+        });
+        
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            this.style.borderColor = '#ddd';
+            this.style.background = '#fafafa';
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                document.getElementById('file').files = files;
+                document.getElementById('fileInfo').textContent = files[0].name;
+                document.getElementById('submitBtn').disabled = false;
+            }
+        });
+        
+        // Disable submit button initially if no file selected or import type not selected
+        document.getElementById('submitBtn').disabled = true;
+        
+        document.getElementById('file').addEventListener('change', function() {
+            const importType = document.querySelector('input[name="import_type"]:checked');
+            document.getElementById('submitBtn').disabled = !(this.files.length && importType);
+        });
+        
+        document.querySelectorAll('input[name="import_type"]').forEach(function(radio) {
+            radio.addEventListener('change', function() {
+                const file = document.getElementById('file');
+                document.getElementById('submitBtn').disabled = !(file.files.length && this.checked);
+            });
+        });
+    </script>
+</body>
+</html>
