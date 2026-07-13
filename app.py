@@ -5,6 +5,8 @@ import pandas as pd
 from flask import Flask, render_template, request, flash, redirect, url_for, jsonify, session
 from werkzeug.utils import secure_filename
 import json
+import warnings
+warnings.filterwarnings('ignore')
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this-in-production'
