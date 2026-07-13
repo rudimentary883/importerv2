@@ -6,7 +6,7 @@ import requests
 import pandas as pd
 from flask import Flask, render_template, request, flash, redirect, url_for, jsonify
 from werkzeug.utils import secure_filename
-import gc  # Garbage collector for memory management
+import gc
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this-in-production')
@@ -14,7 +14,7 @@ app.secret_key = os.getenv('SECRET_KEY', 'your-secret-key-change-this-in-product
 # Configuration
 UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'csv', 'xlsx', 'xls'}
-MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
+MAX_CONTENT_LENGTH = 16 * 1024 * 1024
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
@@ -35,14 +35,21 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def sanitize_code(code):
-    if pd.isna(code) or code == '':
+    """Clean institution code - remove special characters and spaces"""
+    if pd.isna(code) or str(code).strip() == '':
         return ''
-    return re.sub(r'[^A-Za-z0-9]', '', str(code).strip().upper())
+    # Remove any special characters, keep only letters and numbers
+    clean = re.sub(r'[^A-Za-z0-9]', '', str(code).strip().upper())
+    return clean
 
 def create_institution(name, code):
     """Create an institution in Tabbycat"""
     endpoint = f"{TABBYCAT_URL}/api/v1/institutions"
     clean_code = sanitize_code(code)
+    
+    if not clean_code:
+        return {"success": False, "error": "Invalid code"}
+    
     payload = {"name": str(name).strip(), "code": clean_code}
     
     try:
@@ -50,7 +57,9 @@ def create_institution(name, code):
         response.raise_for_status()
         return {"success": True, "url": response.json().get("url"), "code": clean_code}
     except requests.exceptions.RequestException as e:
+        # Check if institution already exists
         if response and response.status_code == 400 and "already exists" in str(response.text).lower():
+            # Try to find existing institution
             try:
                 get_response = requests.get(
                     f"{TABBYCAT_URL}/api/v1/institutions",
@@ -66,10 +75,74 @@ def create_institution(name, code):
                 pass
         return {"success": False, "error": str(e)}
 
+def process_institutions(filepath):
+    """Process institutions from spreadsheet (Format: id, name, code)"""
+    try:
+        # Read the file
+        if filepath.endswith('.csv'):
+            df = pd.read_csv(filepath)
+        else:
+            df = pd.read_excel(filepath)
+        
+        # Log what columns we found
+        print(f"Columns found: {df.columns.tolist()}")
+        print(f"Number of rows: {len(df)}")
+        
+        # Check required columns - make case-insensitive
+        df.columns = [col.strip().lower() for col in df.columns]
+        
+        required_cols = ['name', 'code']
+        missing_cols = [col for col in required_cols if col not in df.columns]
+        if missing_cols:
+            return {"success": False, "error": f"Missing columns: {', '.join(missing_cols)}"}
+        
+        # Clean the data
+        df = df.fillna('')
+        
+        results = {
+            "success": True,
+            "total_rows": len(df),
+            "created": 0,
+            "errors": [],
+            "details": []
+        }
+        
+        # Process each row
+        for idx, row in df.iterrows():
+            # Get name and code
+            name = str(row['name']).strip()
+            code = str(row['code']).strip()
+            
+            # Skip empty rows
+            if not name or not code:
+                results["errors"].append(f"Row {idx+2}: Missing name or code (name='{name}', code='{code}')")
+                continue
+            
+            print(f"Processing: {name} ({code})")
+            
+            result = create_institution(name, code)
+            if result["success"]:
+                results["created"] += 1
+                status = "Already existed" if result.get("existing") else "Created"
+                results["details"].append(f"{name} ({code}) - {status}")
+            else:
+                results["errors"].append(f"Row {idx+2}: {result.get('error', 'Unknown error')}")
+        
+        # Free memory
+        del df
+        gc.collect()
+        return results
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
 def get_institution_by_code(code):
     """Get institution URL by its code with caching"""
     clean_code = sanitize_code(code)
-    # Use a simple cache to avoid repeated API calls
+    if not clean_code:
+        return None
+    
     if not hasattr(get_institution_by_code, 'cache'):
         get_institution_by_code.cache = {}
     
@@ -112,7 +185,6 @@ def create_team(team_data):
         "use_institution_prefix": bool(team_data.get('use_institution_prefix', True))
     }
     
-    # Only add optional fields if they exist
     if team_data.get('reference') and not pd.isna(team_data.get('reference')):
         payload["reference"] = str(team_data.get('reference')).strip()
     if team_data.get('short_reference') and not pd.isna(team_data.get('short_reference')):
@@ -209,46 +281,6 @@ def create_speaker(speaker_data):
     except requests.exceptions.RequestException as e:
         return {"success": False, "error": str(e)}
 
-def process_institutions(filepath):
-    """Process institutions from spreadsheet"""
-    try:
-        # Read file in chunks to save memory
-        if filepath.endswith('.csv'):
-            df = pd.read_csv(filepath)
-        else:
-            df = pd.read_excel(filepath)
-        
-        required_cols = ['id', 'name', 'code']
-        missing_cols = [col for col in required_cols if col not in df.columns]
-        if missing_cols:
-            return {"success": False, "error": f"Missing columns: {', '.join(missing_cols)}"}
-        
-        df = df.fillna('')
-        results = {"success": True, "total_rows": len(df), "created": 0, "errors": [], "details": []}
-        
-        # Process row by row
-        for idx, row in df.iterrows():
-            name = str(row['name']).strip()
-            code = str(row['code']).strip()
-            
-            if not name or not code:
-                results["errors"].append(f"Row {idx+2}: Missing name or code")
-                continue
-            
-            result = create_institution(name, code)
-            if result["success"]:
-                results["created"] += 1
-                results["details"].append(f"{name} ({code})")
-            else:
-                results["errors"].append(f"Row {idx+2}: {result.get('error', 'Unknown error')}")
-        
-        # Free memory
-        del df
-        gc.collect()
-        return results
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
 def process_adjudicators(filepath):
     """Process adjudicators from spreadsheet"""
     try:
@@ -256,6 +288,8 @@ def process_adjudicators(filepath):
             df = pd.read_csv(filepath)
         else:
             df = pd.read_excel(filepath)
+        
+        df.columns = [col.strip().lower() for col in df.columns]
         
         if 'name' not in df.columns:
             return {"success": False, "error": "Missing required column: 'name'"}
@@ -302,11 +336,12 @@ def process_adjudicators(filepath):
             else:
                 results["errors"].append(f"Row {idx+2}: {result.get('error', 'Unknown error')}")
         
-        # Free memory
         del df
         gc.collect()
         return results
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"success": False, "error": str(e)}
 
 def process_teams(filepath):
@@ -316,6 +351,8 @@ def process_teams(filepath):
             df = pd.read_csv(filepath)
         else:
             df = pd.read_excel(filepath)
+        
+        df.columns = [col.strip().lower() for col in df.columns]
         
         required_cols = ['institution', 'code name']
         missing_cols = [col for col in required_cols if col not in df.columns]
@@ -353,11 +390,12 @@ def process_teams(filepath):
             else:
                 results["errors"].append(f"Row {idx+2}: {result.get('error', 'Unknown error')}")
         
-        # Free memory
         del df
         gc.collect()
         return results
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"success": False, "error": str(e)}
 
 def process_speakers(filepath):
@@ -367,6 +405,8 @@ def process_speakers(filepath):
             df = pd.read_csv(filepath)
         else:
             df = pd.read_excel(filepath)
+        
+        df.columns = [col.strip().lower() for col in df.columns]
         
         required_cols = ['name', 'team']
         missing_cols = [col for col in required_cols if col not in df.columns]
@@ -407,11 +447,12 @@ def process_speakers(filepath):
             else:
                 results["errors"].append(f"Row {idx+2}: {result.get('error', 'Unknown error')}")
         
-        # Free memory
         del df
         gc.collect()
         return results
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"success": False, "error": str(e)}
 
 @app.route('/', methods=['GET', 'POST'])
@@ -439,7 +480,6 @@ def index():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
-        # Process based on import type
         if import_type == 'institutions':
             results = process_institutions(filepath)
         elif import_type == 'adjudicators':
@@ -453,7 +493,6 @@ def index():
             os.remove(filepath)
             return redirect(request.url)
         
-        # Clean up uploaded file
         try:
             os.remove(filepath)
         except:
