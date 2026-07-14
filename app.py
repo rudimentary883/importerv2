@@ -4,7 +4,7 @@ import warnings
 warnings.filterwarnings('ignore')
 import requests
 import pandas as pd
-from flask import Flask, render_template, request, flash, redirect, url_for, jsonify
+from flask import Flask, request, jsonify
 from werkzeug.utils import secure_filename
 import gc
 
@@ -45,102 +45,150 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # ============================================================
-# ROUTES - This is what was missing!
+# HTML TEMPLATES (Fixed - no curly braces in CSS)
+# ============================================================
+
+INDEX_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tabbycat Importer</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        .upload-area { border: 2px dashed #ddd; padding: 30px; text-align: center; border-radius: 8px; margin: 20px 0; }
+        .btn { background: #4CAF50; color: white; padding: 12px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+        .btn:hover { background: #45a049; }
+        select, input[type="file"] { padding: 10px; margin: 10px 0; width: 100%; }
+        .status { padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .result-box { background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0; }
+        .error-list { color: #721c24; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Tabbycat Importer</h1>
+        <p>Upload CSV files to import institutions, teams, adjudicators, and speakers.</p>
+        
+        <div class="upload-area">
+            <form method="POST" enctype="multipart/form-data" action="/upload">
+                <p><strong>Select CSV or Excel file:</strong></p>
+                <input type="file" name="file" accept=".csv,.xlsx,.xls" required>
+                
+                <p><strong>Import Type:</strong></p>
+                <select name="import_type" required>
+                    <option value="institutions">🏛️ Institutions</option>
+                    <option value="teams">👥 Teams</option>
+                    <option value="adjudicators">⚖️ Adjudicators</option>
+                    <option value="speakers">🎤 Speakers</option>
+                </select>
+                
+                <br><br>
+                <button type="submit" class="btn">🚀 Start Import</button>
+            </form>
+        </div>
+        
+        <div class="info">
+            <strong>📝 File Format Requirements:</strong><br>
+            <strong>Institutions:</strong> name, code<br>
+            <strong>Teams:</strong> institution, reference, short_reference, code name, use_institution_prefix, team_name (human)<br>
+            <strong>Adjudicators:</strong> name, institution, email, gender<br>
+            <strong>Speakers:</strong> name, team, email, gender
+        </div>
+        
+        <div style="margin-top: 20px; padding: 10px; background: #f0f0f0; border-radius: 5px;">
+            <p><strong>🔗 API URL:</strong> {api_url}</p>
+            <p><strong>🔑 Token:</strong> {token_preview}...</p>
+            <p><a href="/health">Health Check</a></p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+RESULT_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Import Complete</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        .success-box { background: #d4edda; padding: 15px; border-radius: 5px; margin: 10px 0; color: #155724; border: 1px solid #c3e6cb; }
+        .error-box { background: #f8d7da; padding: 15px; border-radius: 5px; margin: 10px 0; color: #721c24; border: 1px solid #f5c6cb; }
+        .btn { background: #4CAF50; color: white; padding: 12px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; text-decoration: none; display: inline-block; }
+        .btn:hover { background: #45a049; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>✅ Import Complete</h1>
+        <div class="success-box">
+            <strong>Rows Processed:</strong> {total_rows}<br>
+            <strong>Items Created:</strong> {created}<br>
+            <strong>Errors:</strong> {error_count}
+        </div>
+        {errors_html}
+        <p><a href="/" class="btn">Import Another File</a></p>
+        <p><a href="/">Back to Home</a></p>
+    </div>
+</body>
+</html>
+"""
+
+ERROR_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Error</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        h1 { color: #721c24; }
+        .error-box { background: #f8d7da; padding: 15px; border-radius: 5px; margin: 10px 0; color: #721c24; border: 1px solid #f5c6cb; }
+        .btn { background: #4CAF50; color: white; padding: 12px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; text-decoration: none; display: inline-block; }
+        .btn:hover { background: #45a049; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>❌ Error</h1>
+        <div class="error-box">
+            <p>{error_message}</p>
+        </div>
+        <p><a href="/" class="btn">Go Back</a></p>
+    </div>
+</body>
+</html>
+"""
+
+# ============================================================
+# ROUTES
 # ============================================================
 
 @app.route('/')
 def index():
     """Main page with upload form"""
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Tabbycat Importer</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-            .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-            h1 { color: #333; }
-            .upload-area { border: 2px dashed #ddd; padding: 30px; text-align: center; border-radius: 8px; margin: 20px 0; }
-            .btn { background: #4CAF50; color: white; padding: 12px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
-            .btn:hover { background: #45a049; }
-            select, input[type="file"] { padding: 10px; margin: 10px 0; width: 100%; }
-            .status { padding: 15px; margin: 10px 0; border-radius: 5px; }
-            .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-            .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-            .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🚀 Tabbycat Importer</h1>
-            <p>Upload CSV files to import institutions, teams, adjudicators, and speakers.</p>
-            
-            <div class="upload-area">
-                <form method="POST" enctype="multipart/form-data" action="/upload">
-                    <p><strong>Select CSV or Excel file:</strong></p>
-                    <input type="file" name="file" accept=".csv,.xlsx,.xls" required>
-                    
-                    <p><strong>Import Type:</strong></p>
-                    <select name="import_type" required>
-                        <option value="institutions">🏛️ Institutions</option>
-                        <option value="teams">👥 Teams</option>
-                        <option value="adjudicators">⚖️ Adjudicators</option>
-                        <option value="speakers">🎤 Speakers</option>
-                    </select>
-                    
-                    <br><br>
-                    <button type="submit" class="btn">🚀 Start Import</button>
-                </form>
-            </div>
-            
-            <div class="info">
-                <strong>📝 File Format Requirements:</strong><br>
-                <strong>Institutions:</strong> name, code<br>
-                <strong>Teams:</strong> institution, reference, short_reference, code name, use_institution_prefix, team_name (human)<br>
-                <strong>Adjudicators:</strong> name, institution, email, gender<br>
-                <strong>Speakers:</strong> name, team, email, gender
-            </div>
-            
-            <div style="margin-top: 20px; padding: 10px; background: #f0f0f0; border-radius: 5px;">
-                <p><strong>🔗 API URL:</strong> {{ api_url }}</p>
-                <p><strong>🔑 Token:</strong> {{ token_preview }}...</p>
-                <p><a href="/health">Health Check</a></p>
-            </div>
-        </div>
-    </body>
-    </html>
-    '''.format(api_url=TABBYCAT_API_URL, token_preview=TABBYCAT_TOKEN[:10] if TABBYCAT_TOKEN else 'NOT SET')
+    token_preview = TABBYCAT_TOKEN[:10] if TABBYCAT_TOKEN else 'NOT SET'
+    return INDEX_HTML.format(api_url=TABBYCAT_API_URL, token_preview=token_preview)
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
     """Handle file upload and import"""
     if 'file' not in request.files:
-        return '''
-        <html><body>
-            <h1>❌ Error</h1>
-            <p>No file selected</p>
-            <p><a href="/">Go Back</a></p>
-        </body></html>
-        ''', 400
+        return ERROR_HTML.format(error_message="No file selected"), 400
     
     file = request.files['file']
     if file.filename == '':
-        return '''
-        <html><body>
-            <h1>❌ Error</h1>
-            <p>No file selected</p>
-            <p><a href="/">Go Back</a></p>
-        </body></html>
-        ''', 400
+        return ERROR_HTML.format(error_message="No file selected"), 400
     
     if not allowed_file(file.filename):
-        return '''
-        <html><body>
-            <h1>❌ Error</h1>
-            <p>Invalid file type. Use CSV or Excel.</p>
-            <p><a href="/">Go Back</a></p>
-        </body></html>
-        ''', 400
+        return ERROR_HTML.format(error_message="Invalid file type. Use CSV or Excel."), 400
     
     import_type = request.form.get('import_type', 'institutions')
     
@@ -161,52 +209,40 @@ def upload_file():
         result = process_file(df, import_type)
         
         # Clean up
-        os.remove(filepath)
+        try:
+            os.remove(filepath)
+        except:
+            pass
         
-        # Return results
-        return f'''
-        <html>
-        <head><title>Import Complete</title></head>
-        <body style="font-family: Arial; padding: 20px;">
-            <div style="max-width: 800px; margin: 0 auto;">
-                <h1>✅ Import Complete</h1>
-                <div class="success" style="background: #d4edda; padding: 15px; border-radius: 5px; margin: 10px 0;">
-                    <strong>Rows Processed:</strong> {result.get('total_rows', 0)}<br>
-                    <strong>Items Created:</strong> {result.get('created', 0)}<br>
-                    <strong>Errors:</strong> {len(result.get('errors', []))}
-                </div>
-                {format_errors(result.get('errors', []))}
-                <p><a href="/">Import Another File</a></p>
-                <p><a href="/">Back to Home</a></p>
-            </div>
-        </body>
-        </html>
-        '''
+        # Format errors
+        errors_html = ""
+        if result.get('errors'):
+            error_items = ''.join([f'<li>{e}</li>' for e in result['errors'][:20]])
+            if len(result['errors']) > 20:
+                error_items += f'<li>... and {len(result["errors"]) - 20} more errors</li>'
+            errors_html = f'<div class="error-box"><strong>⚠️ Errors:</strong><ul>{error_items}</ul></div>'
+        
+        return RESULT_HTML.format(
+            total_rows=result.get('total_rows', 0),
+            created=result.get('created', 0),
+            error_count=len(result.get('errors', [])),
+            errors_html=errors_html
+        )
+        
     except Exception as e:
         try:
             os.remove(filepath)
         except:
             pass
-        return f'''
-        <html><body>
-            <h1>❌ Error</h1>
-            <p>Error: {str(e)}</p>
-            <p><a href="/">Go Back</a></p>
-        </body></html>
-        ''', 500
+        return ERROR_HTML.format(error_message=str(e)), 500
 
-def format_errors(errors):
-    """Format error messages for display"""
-    if not errors:
-        return ''
-    html = '<div style="background: #f8d7da; padding: 15px; border-radius: 5px; margin: 10px 0;">'
-    html += '<strong>⚠️ Errors:</strong><ul>'
-    for error in errors[:20]:
-        html += f'<li>{error}</li>'
-    if len(errors) > 20:
-        html += f'<li>... and {len(errors) - 20} more errors</li>'
-    html += '</ul></div>'
-    return html
+@app.route('/health')
+def health_check():
+    return jsonify({"status": "healthy", "message": "Tabbycat Importer is running"})
+
+# ============================================================
+# PROCESSING FUNCTIONS
+# ============================================================
 
 def process_file(df, import_type):
     """Process the dataframe based on import type"""
@@ -304,7 +340,7 @@ def process_file(df, import_type):
     return results
 
 # ============================================================
-# API Functions
+# API FUNCTIONS
 # ============================================================
 
 def sanitize_code(code):
@@ -432,10 +468,6 @@ def create_speaker(speaker_data):
             return {"success": False, "error": f"Status {response.status_code}"}
     except Exception as e:
         return {"success": False, "error": str(e)}
-
-@app.route('/health')
-def health_check():
-    return jsonify({"status": "healthy", "message": "Tabbycat Importer is running"})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
