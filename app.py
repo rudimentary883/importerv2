@@ -14,7 +14,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Your Calico credentials
 TABBYCAT_URL = "https://17thvmdc.calicotab.com"
-TABBYCAT_TOKEN = "30d6f2baab640998ac14594b7459337d8c463e67"
+TABBYCAT_TOKEN = "30d6f2baab6409983fe6eb6d0ebdde40e391bd60"
 
 HEADERS = {
     "Authorization": f"Token {TABBYCAT_TOKEN}",
