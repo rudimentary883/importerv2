@@ -14,7 +14,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Your Calico credentials
 TABBYCAT_URL = "https://17thvmdc.calicotab.com"
-TABBYCAT_TOKEN = "30d6f2baab6409983fe6eb6d0ebdde40e391bd60"
+TABBYCAT_TOKEN = "30d6f2baab640998ac14594b7459337d8c463e67"
 
 HEADERS = {
     "Authorization": f"Token {TABBYCAT_TOKEN}",
@@ -33,15 +33,15 @@ def fix_institution_code(code):
     """Fix common institution code mismatches"""
     code = str(code).strip().upper()
     fixes = {
-        'VSU': 'VSU',
-        'USJ-R': 'USJ-R',
-        'USJ R': 'USJ-R',
+        'VSU': 'VSIU',
+        'USJ-R': 'USJR',
+        'USJ R': 'USJR',
         'MSUM': 'MSU-M',
         'MSU-MAIN': 'MSU-M',
         'MSU MAIN': 'MSU-M',
         'MSUII': 'MSU-IIT',
         'MSU-IIT': 'MSU-IIT',
-        'UPMIN': 'UPMin',
+        'UPMIN': 'UPMIN',
         'XU': 'XU',
         'ADDU': 'ADDU',
         'ADZU': 'ADZU',
@@ -49,27 +49,59 @@ def fix_institution_code(code):
         'CPU': 'CPU',
         'UPC': 'UPC',
         'UPV': 'UPV',
+        'USJR': 'USJR',
     }
     return fixes.get(code, code)
 
+def get_api_endpoints(resource_type):
+    """Return possible API endpoints for each resource type"""
+    base_url = TABBYCAT_URL
+    
+    endpoints = {
+        'institutions': [
+            f"{base_url}/api/v1/institutions/",
+            f"{base_url}/api/institutions/",
+        ],
+        'teams': [
+            f"{base_url}/api/v1/teams/",
+            f"{base_url}/api/teams/",
+            f"{base_url}/api/v1/participants/teams/",
+            f"{base_url}/api/participants/teams/",
+            f"{base_url}/api/v1/database/teams/",
+            f"{base_url}/api/database/teams/",
+            f"{base_url}/api/v1/tournament/teams/",
+            f"{base_url}/api/tournament/teams/",
+        ],
+        'adjudicators': [
+            f"{base_url}/api/v1/adjudicators/",
+            f"{base_url}/api/adjudicators/",
+            f"{base_url}/api/v1/participants/adjudicators/",
+            f"{base_url}/api/participants/adjudicators/",
+            f"{base_url}/api/v1/database/adjudicators/",
+            f"{base_url}/api/database/adjudicators/",
+        ],
+        'speakers': [
+            f"{base_url}/api/v1/speakers/",
+            f"{base_url}/api/speakers/",
+            f"{base_url}/api/v1/participants/speakers/",
+            f"{base_url}/api/participants/speakers/",
+        ]
+    }
+    return endpoints.get(resource_type, [])
+
 def get_institution_by_code(code):
-    """Get institution URL by code with better error handling"""
+    """Get institution URL by code"""
     clean_code = sanitize_code(code)
     if not clean_code:
         return None
     
     try:
-        # Try the standard endpoint
         response = requests.get(f"{TABBYCAT_URL}/api/v1/institutions/", headers=HEADERS, timeout=10)
         if response.status_code == 200:
             for inst in response.json():
                 if inst.get("code") == clean_code:
                     return inst.get("url")
-            print(f"⚠️ Institution '{clean_code}' not found in API response")
-            return None
-        else:
-            print(f"⚠️ GET institutions returned: {response.status_code}")
-            return None
+        return None
     except Exception as e:
         print(f"❌ Error getting institution: {e}")
         return None
@@ -81,19 +113,20 @@ def create_institution(name, code):
     
     payload = {"name": str(name).strip(), "code": clean_code}
     
-    try:
-        response = requests.post(f"{TABBYCAT_URL}/api/v1/institutions/", json=payload, headers=HEADERS, timeout=10)
-        if response.status_code in [200, 201]:
-            return {"success": True}
-        elif response.status_code == 400 and "already exists" in str(response.text).lower():
-            return {"success": True, "existing": True}
-        else:
-            return {"success": False, "error": f"Status {response.status_code}"}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    for endpoint in get_api_endpoints('institutions'):
+        try:
+            response = requests.post(endpoint, json=payload, headers=HEADERS, timeout=10)
+            if response.status_code in [200, 201]:
+                return {"success": True}
+            elif response.status_code == 400 and "already exists" in str(response.text).lower():
+                return {"success": True, "existing": True}
+        except:
+            continue
+    
+    return {"success": False, "error": "All institution endpoints failed"}
 
 def create_team(team_data):
-    """Create a team in Calico - tries multiple endpoint patterns"""
+    """Create a team using multiple possible endpoints"""
     institution_code = sanitize_code(str(team_data.get('institution', '')))
     inst_url = get_institution_by_code(institution_code)
     
@@ -102,47 +135,31 @@ def create_team(team_data):
     
     team_name = team_data.get('team_name (human)', '') or team_data.get('code name', '')
     
-    # Try multiple endpoint patterns for teams
-    endpoints = [
-        f"{TABBYCAT_URL}/api/v1/teams/",
-        f"{TABBYCAT_URL}/api/teams/",
-        f"{TABBYCAT_URL}/api/v1/participants/teams/",
-        f"{TABBYCAT_URL}/api/participants/teams/",
-        f"{TABBYCAT_URL}/api/v1/database/teams/",
-        f"{TABBYCAT_URL}/api/database/teams/",
-    ]
-    
     payload = {
         "name": str(team_name).strip(),
         "institution": inst_url,
         "use_institution_prefix": bool(team_data.get('use_institution_prefix', True))
     }
     
-    # Add optional fields if they exist
     if team_data.get('reference') and not pd.isna(team_data.get('reference')):
         payload["reference"] = str(team_data.get('reference')).strip()
     if team_data.get('short_reference') and not pd.isna(team_data.get('short_reference')):
         payload["short_reference"] = str(team_data.get('short_reference')).strip()
     
-    for endpoint in endpoints:
+    for endpoint in get_api_endpoints('teams'):
         try:
             response = requests.post(endpoint, json=payload, headers=HEADERS, timeout=15)
             if response.status_code in [200, 201]:
                 return {"success": True}
             elif response.status_code == 400 and "already exists" in str(response.text).lower():
                 return {"success": True, "existing": True}
-            elif response.status_code == 404:
-                continue  # Try next endpoint
-            else:
-                # If we get a 400 with a different error, it might be the wrong endpoint
-                continue
-        except Exception as e:
+        except:
             continue
     
-    return {"success": False, "error": "All team API endpoints failed"}
+    return {"success": False, "error": "All team endpoints failed"}
 
 def create_adjudicator(adj_data):
-    """Create an adjudicator in Calico - tries multiple endpoint patterns"""
+    """Create an adjudicator using multiple possible endpoints"""
     institution_code = sanitize_code(str(adj_data.get('institution', '')))
     inst_url = get_institution_by_code(institution_code) if institution_code else None
     
@@ -155,42 +172,25 @@ def create_adjudicator(adj_data):
     if adj_data.get('gender') and not pd.isna(adj_data.get('gender')):
         payload["gender"] = str(adj_data.get('gender')).strip()
     
-    # Try multiple endpoint patterns for adjudicators
-    endpoints = [
-        f"{TABBYCAT_URL}/api/v1/adjudicators/",
-        f"{TABBYCAT_URL}/api/adjudicators/",
-        f"{TABBYCAT_URL}/api/v1/participants/adjudicators/",
-        f"{TABBYCAT_URL}/api/participants/adjudicators/",
-    ]
-    
-    for endpoint in endpoints:
+    for endpoint in get_api_endpoints('adjudicators'):
         try:
             response = requests.post(endpoint, json=payload, headers=HEADERS, timeout=15)
             if response.status_code in [200, 201]:
                 return {"success": True}
             elif response.status_code == 400 and "already exists" in str(response.text).lower():
                 return {"success": True, "existing": True}
-            elif response.status_code == 404:
-                continue
-            else:
-                continue
-        except Exception as e:
+        except:
             continue
     
-    return {"success": False, "error": "All adjudicator API endpoints failed"}
+    return {"success": False, "error": "All adjudicator endpoints failed"}
 
 def create_speaker(speaker_data):
     """Create a speaker in Calico"""
     team_name = str(speaker_data.get('team', '')).strip()
     
-    # First, find the team
-    endpoints = [
-        f"{TABBYCAT_URL}/api/v1/teams/",
-        f"{TABBYCAT_URL}/api/teams/",
-    ]
-    
+    # Find the team first
     team_url = None
-    for endpoint in endpoints:
+    for endpoint in get_api_endpoints('teams'):
         try:
             response = requests.get(endpoint, headers=HEADERS, timeout=10)
             if response.status_code == 200:
@@ -269,48 +269,49 @@ def home():
                 <div class="info">
                     <p><strong>Debug Info:</strong></p>
                     <p>URL: https://17thvmdc.calicotab.com</p>
-                    <p><a href="/find-api" target="_blank">Find API Endpoint</a></p>
+                    <p><a href="/test-endpoints" target="_blank">🔍 Test All API Endpoints</a></p>
                 </div>
             </div>
         </body>
     </html>
     """
 
-@app.route('/find-api')
-def find_api():
-    """Test API endpoints"""
+@app.route('/test-endpoints')
+def test_endpoints():
+    """Test all API endpoints for all resource types"""
     html = """
     <html>
-        <head><title>API Test</title></head>
+        <head><title>API Endpoint Test</title></head>
         <body style="font-family: Arial; padding: 20px; background: #f0f0f0;">
             <div style="max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px;">
                 <h1>🔍 API Endpoint Test</h1>
+                <p>Testing all possible endpoints for each resource type...</p>
+                <hr>
     """
     
-    endpoints = [
-        f"{TABBYCAT_URL}/api/v1/institutions/",
-        f"{TABBYCAT_URL}/api/v1/teams/",
-        f"{TABBYCAT_URL}/api/v1/adjudicators/",
-        f"{TABBYCAT_URL}/api/institutions/",
-        f"{TABBYCAT_URL}/api/teams/",
-        f"{TABBYCAT_URL}/api/adjudicators/",
-    ]
+    resource_types = ['institutions', 'teams', 'adjudicators', 'speakers']
     
-    for endpoint in endpoints:
-        try:
-            response = requests.get(endpoint, headers=HEADERS, timeout=10)
-            if response.status_code == 200:
-                html += f"<p style='color: green;'>✅ {endpoint} - Working (Status: 200)</p>"
-            elif response.status_code == 405:
-                html += f"<p style='color: orange;'>⚠️ {endpoint} - Exists but wrong method (Status: 405)</p>"
-            elif response.status_code == 404:
-                html += f"<p style='color: red;'>❌ {endpoint} - Not Found (Status: 404)</p>"
-            else:
-                html += f"<p style='color: orange;'>⚠️ {endpoint} - Status: {response.status_code}</p>"
-        except Exception as e:
-            html += f"<p style='color: red;'>❌ {endpoint} - Error: {str(e)}</p>"
+    for resource_type in resource_types:
+        html += f"<h2>{resource_type.upper()}</h2>"
+        endpoints = get_api_endpoints(resource_type)
+        
+        for endpoint in endpoints:
+            try:
+                # Use GET for testing
+                response = requests.get(endpoint, headers=HEADERS, timeout=5)
+                if response.status_code == 200:
+                    html += f"<p style='color: green;'>✅ {endpoint} - Working (200)</p>"
+                elif response.status_code == 405:
+                    html += f"<p style='color: orange;'>⚠️ {endpoint} - Exists (405 - POST required)</p>"
+                elif response.status_code == 404:
+                    html += f"<p style='color: red;'>❌ {endpoint} - Not Found (404)</p>"
+                else:
+                    html += f"<p style='color: orange;'>⚠️ {endpoint} - Status: {response.status_code}</p>"
+            except Exception as e:
+                html += f"<p style='color: red;'>❌ {endpoint} - Error: {str(e)}</p>"
     
     html += """
+                <hr>
                 <p><a href="/">Back to Home</a></p>
             </div>
         </body>
@@ -537,7 +538,7 @@ def status():
                     <hr>
                     <p><a href="/" style="color: #4CAF50;">Import Another File</a></p>
                     <p><a href="{TABBYCAT_URL}/database/participants/" target="_blank" style="color: #4CAF50;">View in Database</a></p>
-                    <p><a href="/find-api" style="color: #4CAF50;">Test API Endpoints</a></p>
+                    <p><a href="/test-endpoints" style="color: #4CAF50;">Test API Endpoints</a></p>
                 </div>
             </body>
         </html>
